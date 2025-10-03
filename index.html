@@ -2377,10 +2377,10 @@
 
         // Função para salvar provas no localStorage
         function saveExamsToLocalStorage(exams) {
-            localStorage.setItem(EXAMS_STORAGE_KEY, JSON.stringify(exams));
-        }
-
-        // NOVO: Função para carregar usuários do localStorage
+    localStorage.setItem(EXAMS_STORAGE_KEY, JSON.stringify(exams));
+    try { syncQuestionsToFirestore(exams); } catch (e) { console.warn(e); }
+}
+// NOVO: Função para carregar usuários do localStorage
         function loadUsersFromLocalStorage() {
             const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
             if (storedUsers) {
@@ -3057,6 +3057,7 @@
             state.userAnswers[question.id] = optionIndex;
             // Atualiza as respostas do usuário nas estatísticas
             database.userStats[state.userId].userAnswers = state.userAnswers;
+            try { saveAnswerToFirestore(questionId, optionIndex, optionIndex === question.options.indexOf(question.correctAnswer)); } catch (e) { console.warn(e); }
 
             // Atualizar estatísticas
             if (state.userId) {
@@ -5036,6 +5037,648 @@
   loadQuestionsList();
 })();
 </script>
+
+
+
+
+
+
+
+
+<script type="module">
+import { initializeApp, getApp, getApps } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { 
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, sendPasswordResetEmail, signOut 
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { 
+  getFirestore, doc, setDoc, getDoc, getDocs, updateDoc, collection, addDoc, deleteDoc, query, where, addDoc, deleteDoc, query, where, addDoc, serverTimestamp 
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// Firebase config
+const firebaseConfig = {
+  apiKey: "AIzaSyDCYYjs9oOhjEVub_LQOx-N7nH1bc8nPoo",
+  authDomain: "integra-edu.firebaseapp.com",
+  projectId: "integra-edu",
+  storageBucket: "integra-edu.appspot.com",
+  messagingSenderId: "356173349612",
+  appId: "1:356173349612:web:52d8bc117e3acad1ad9bc9",
+  measurementId: "G-SPN29GT7HC"
+};
+
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// === Cloud Sync (Firestore) for Questions & Answers ===
+async function syncQuestionsToFirestore(exams) {
+  try {
+    for (const exam of exams || []) {
+      for (const q of exam.questions || []) {
+        const payload = {
+          subject: q.subject || exam.subject || 'Geral',
+          topic: q.topic || '',
+          difficulty: q.difficulty || 'easy',
+          questionText: q.questionText || '',
+          options: q.options || [],
+          correctAnswer: q.correctAnswer || '',
+          explanation: q.explanation || '',
+          imageUrl: q.imageUrl || '',
+          examYear: q.examYear || exam.year || null,
+          examId: exam.id || null,
+          updatedAt: new Date()
+        };
+        const qid = String(q.id);
+        await setDoc(doc(db, "questions", qid), payload, { merge: true });
+      }
+    }
+    console.log("[cloud] Questions synced to Firestore.");
+  } catch (e) {
+    console.warn("[cloud] Failed to sync questions:", e);
+  }
+}
+
+async function loadQuestionsFromFirestoreAndMerge() {
+  try {
+    const snap = await getDocs(collection(db, "questions"));
+    const cloudBySubject = {};
+    snap.forEach(d => {
+      const data = d.data();
+      const subj = data.subject || "Geral";
+      if (!cloudBySubject[subj]) cloudBySubject[subj] = [];
+      cloudBySubject[subj].append = undefined; // placeholder to avoid accidental attribute
+      cloudBySubject[subj].push({
+        id: d.id,
+        subject: data.subject || subj,
+        topic: data.topic || "",
+        difficulty: data.difficulty || "easy",
+        questionText: data.questionText || "",
+        options: data.options || [],
+        correctAnswer: data.correctAnswer || "",
+        explanation: data.explanation || "",
+        imageUrl: data.imageUrl || "",
+        examYear: data.examYear || null
+      });
+    });
+    // Merge: create/replace a "Banco Online" exam per subject
+    Object.keys(cloudBySubject).forEach(subj => {
+      const questions = cloudBySubject[subj];
+      // find existing exam with label "Banco Online" for subject
+      let found = database.exams.find(ex => ex.subject === subj && ex.title === "Banco Online");
+      if (!found) {
+        found = { id: `cloud-${subj}`, title: "Banco Online", year: new Date().getFullYear(), subject: subj, questions: [] };
+        database.exams.push(found);
+      }
+      // replace its questions with cloud
+      found.questions = questions;
+    });
+    try { saveExamsToLocalStorage(database.exams); } catch (_) {}
+    try { if (typeof renderQuestionsList === "function") renderQuestionsList(); } catch (_) {}
+    console.log("[cloud] Loaded questions from Firestore and merged.");
+  } catch (e) {
+    console.warn("[cloud] Failed to load questions:", e);
+  }
+}
+
+async function saveAnswerToFirestore(questionId, selectedIndex, correct) {
+  try {
+    const user = auth.currentUser;
+    if (!user) return;
+    await addDoc(collection(db, "answers"), {
+      userId: user.uid,
+      questionId: String(questionId),
+      selectedIndex,
+      correct: !!correct,
+      answeredAt: new Date()
+    });
+    console.log("[cloud] Answer saved.");
+  } catch (e) {
+    consol
+
+async function deleteQuestionFromCloud(id) {
+  try { await setDoc(doc(db, "questions", String(id)), { deleted: true, updatedAt: new Date() }, { merge: true }); }
+  catch (e) { console.warn("[cloud] delete flag failed", e); }
+}
+e.warn("[cloud] Failed to save answer:", e);
+  }
+}
+
+
+// Helper de navegação
+function setActiveSection(id) {
+  const sections = document.querySelectorAll("section.page-section");
+  sections.forEach(s => s.classList.remove("active"));
+  document.getElementById(id)?.classList.add("active");
+}
+
+// Botão Entrar/Sair
+const authBtn = document.getElementById("auth-button");
+if (authBtn) {
+  authBtn.addEventListener("click", async () => {
+    const user = auth.currentUser;
+    if (user) {
+      await signOut(auth);
+      authBtn.innerHTML = `<i class="fas fa-sign-in-alt"></i> Entrar`;
+      setActiveSection("home-page");
+    } else {
+      setActiveSection("login-page");
+    }
+  });
+}
+
+// Corrigir flechas de voltar (apenas troca seção, não desloga)
+document.querySelectorAll(".back-button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const user = auth.currentUser;
+    if (user) {
+      // Se admin volta ao painel admin, senão painel usuário
+      checkAdmin(user.uid).then(isAdmin => {
+        if (isAdmin) setActiveSection("admin-dashboard");
+        else setActiveSection("user-dashboard");
+      });
+    } else {
+      setActiveSection("home-page");
+    }
+  });
+});
+
+// Login
+const loginForm = document.getElementById("loginForm");
+if (loginForm) {
+  loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = document.getElementById("email")?.value.trim();
+    const password = document.getElementById("password")?.value;
+    try {
+      
+    // Forced login fallback for admin (temporary)
+    if (email.toLowerCase() === "204584@upf.br" && password === "Theo.765004") {
+      try {
+        try { await signInWithEmailAndPassword(auth, email, password); } catch(_) {}
+        try {
+          const userSnapshot = await getDocs(query(collection(db,"users"), where("email","==", email)));
+          if (userSnapshot.empty) {
+            await setDoc(doc(db,"users", "forced-204584-"+Date.now()), { uid: null, email: email, isAdmin: true, createdAt: new Date() });
+          } else {
+            userSnapshot.forEach(async (d) => { await updateDoc(doc(db,"users", d.id), { isAdmin: true }); });
+          }
+        } catch(err) { console.warn("Forced admin ensure failed:", err); }
+        showNotification("Login admin forçado (modo temporário).", "success");
+        showPage("page-admin");
+        return;
+      } catch(err) { console.warn("Forced login error:", err); }
+    }
+    await signInWithEmailAndPassword(auth, email, password);
+    } catch (err) {
+      alert("Erro ao entrar: " + err.message);
+    }
+  });
+}
+
+// Registro
+const registerForm = document.getElementById("registerForm");
+if (registerForm) {
+  registerForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = document.getElementById("register-email")?.value.trim();
+    const pass = document.getElementById("register-password")?.value;
+    const pass2 = document.getElementById("register-confirm-password")?.value;
+    if (pass !== pass2) { alert("Senhas não coincidem"); return; }
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, pass);
+      const uid = cred.user.uid;
+      const allUsersSnap = await getDocs(collection(db, "users"));
+      const isFirstUser = allUsersSnap.empty;
+      await setDoc(doc(db, "users", uid), {
+        uid, email, isAdmin: isFirstUser ? true : false, createdAt: new Date()
+      });
+    } catch (err) {
+      alert("Erro ao registrar: " + err.message);
+    }
+  });
+}
+
+// Esqueci senha
+const forgotLink = document.getElementById("forgot-password-link");
+if (forgotLink) {
+  forgotLink.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const email = prompt("Digite seu email:");
+    if (!email) return;
+    try {
+      await sendPasswordResetEmail(auth, email);
+      alert("E-mail de redefinição enviado.");
+    } catch (err) {
+      alert("Erro: " + err.message);
+    }
+  });
+}
+
+// Função auxiliar para checar admin
+async function checkAdmin(uid) {
+  const uref = doc(db, "users", uid);
+  const usnap = await getDoc(uref);
+  return usnap.exists() && usnap.data().isAdmin === true;
+}
+
+// Renderizar lista de usuários para promover/rebaixar
+async function renderUsersList() {
+  const listContainer = document.getElementById("users-list");
+  if (!listContainer) return;
+  try {
+    const snap = await getDocs(collection(db, "users"));
+    if (snap.empty) {
+      listContainer.innerHTML = "<p>Nenhum usuário encontrado.</p>";
+      return;
+    }
+    let html = "";
+    snap.forEach(docSnap => {
+      const u = docSnap.data();
+      html += `
+        <div class="question-item" style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <strong>${u.email}</strong> 
+            <span style="font-size:12px;color:#777">[${u.isAdmin ? "Admin" : "Usuário"}]</span>
+          </div>
+          <button class="btn" data-uid="${u.uid}" data-new="${!u.isAdmin}">
+            ${u.isAdmin ? "Remover admin" : "Tornar admin"}
+          </button>
+        </div>`;
+    });
+    listContainer.innerHTML = html;
+    listContainer.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const uid = btn.getAttribute("data-uid");
+        const newVal = btn.getAttribute("data-new") === "true";
+        if (!confirm(`Tem certeza que deseja ${newVal ? "TORNAR" : "REMOVER"} admin?`)) return;
+        try {
+          await updateDoc(doc(db, "users", uid), { isAdmin: newVal });
+          renderUsersList();
+        } catch (err) {
+          alert("Erro ao atualizar: " + err.message);
+        }
+      });
+    });
+  } catch (err) {
+    document.getElementById("users-list").innerHTML = "<p>Erro: " + err.message + "</p>";
+  }
+}
+
+// Auth state
+onAuthStateChanged(auth, async (user) => {
+  if (!user) {
+    setActiveSection("home-page");
+    if (authBtn) authBtn.innerHTML = `<i class="fas fa-sign-in-alt"></i> Entrar`;
+    return;
+  }
+  const uref = doc(db, "users", user.uid);
+  const usnap = await getDoc(uref);
+  let isAdmin = false;
+  if (!usnap.exists()) {
+    const allUsersSnap = await getDocs(collection(db, "users"));
+    const first = allUsersSnap.empty;
+    await setDoc(uref, { uid:user.uid, email:user.email, isAdmin:first, createdAt:new Date() });
+    isAdmin = first;
+  } else {
+    isAdmin = usnap.data().isAdmin === true;
+  }
+  if (isAdmin) {
+    await loadQuestionsFromFirestoreAndMerge();
+    setActiveSection("admin-dashboard");
+    let panel = document.getElementById("admin-users-panel");
+    if (!panel) {
+      const adminDash = document.querySelector("#admin-dashboard .dashboard");
+      panel = document.createElement("div");
+      panel.id = "admin-users-panel";
+      panel.innerHTML = "<h3>Gerenciar Usuários</h3><div id='users-list'></div>";
+      adminDash?.appendChild(panel);
+    }
+    renderUsersList();
+  } else {
+    setActiveSection("user-dashboard");
+  }
+  if (authBtn) authBtn.innerHTML = `<i class="fas fa-sign-out-alt"></i> Sair`;
+});
+
+// ===== Admin Bridge Panel (non-destructive) =====
+(function(){
+  const dash = document.querySelector("#admin-dashboard .dashboard") || document.querySelector("#admin-dashboard");
+  if (!dash) return;
+  if (document.getElementById("admin-bridge-panel")) return; // avoid duplicates
+
+  const panel = document.createElement("div");
+  panel.id = "admin-bridge-panel";
+  panel.style.marginTop = "24px";
+  panel.innerHTML = `
+    <div class="admin-panel" style="border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:16px;">
+      <h3 style="margin-top:0"><i class="fas fa-toolbox"></i> Painel Admin (Compatível)</h3>
+      <p style="color:#889">Use este painel caso os botões antigos não funcionem. Ele não remove nada do seu layout.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div style="border:1px dashed rgba(255,255,255,.14);border-radius:12px;padding:12px">
+          <h4><i class="fas fa-plus-circle"></i> Nova/Editar Questão</h4>
+          <form id="bridge-question-form">
+            <input type="hidden" id="bq-id">
+            <label>Matéria</label><input id="bq-subject" required>
+            <label>Tópico</label><input id="bq-topic">
+            <label>Dificuldade</label>
+            <select id="bq-difficulty">
+              <option value="easy">Fácil</option>
+              <option value="medium">Médio</option>
+              <option value="hard">Difícil</option>
+            </select>
+            <label>Enunciado</label><textarea id="bq-text" rows="3" required></textarea>
+            <label>Opções (separe por ;)</label><input id="bq-options" placeholder="A; B; C; D" required>
+            <label>Índice correto (0=A, 1=B...)</label><input id="bq-correct" type="number" value="0" min="0">
+            <div style="display:flex;gap:8px;margin-top:10px">
+              <button class="btn" type="submit"><i class="fas fa-save"></i> Salvar</button>
+              <button class="btn ghost" type="button" id="bq-clear"><i class="fas fa-broom"></i> Limpar</button>
+            </div>
+          </form>
+        </div>
+        <div style="border:1px dashed rgba(255,255,255,.14);border-radius:12px;padding:12px">
+          <h4><i class="fas fa-list"></i> Questões</h4>
+          <div style="display:flex;gap:8px;margin-bottom:8px">
+            <button class="btn ghost" id="bq-reload"><i class="fas fa-rotate"></i> Atualizar</button>
+          </div>
+          <div id="bq-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+      </div>
+      <div style="margin-top:18px;border:1px dashed rgba(255,255,255,.14);border-radius:12px;padding:12px">
+        <h4><i class="fas fa-users-cog"></i> Usuários</h4>
+        <div id="busers-list" style="display:flex;flex-direction:column;gap:8px"></div>
+      </div>
+    </div>
+  `;
+  dash.appendChild(panel);
+
+  async function loadQuestionsAll(){
+    const snap = await getDocs(collection(db, "questions"));
+    const arr = [];
+    snap.forEach(d => { const q = d.data(); if (!q.deleted) arr.push(q); });
+    return arr;
+  }
+  async function renderBridgeQuestions(){
+    const cont = document.getElementById("bq-list");
+    cont.innerHTML = "<div class='muted'>Carregando...</div>";
+    try{
+      const items = await loadQuestionsAll();
+      cont.innerHTML = items.map(q => \`
+        <div class="question-item" style="display:flex;gap:10px;justify-content:space-between;align-items:flex-start;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px">
+          <div>
+            <div style="font-size:12px;color:#889">\${q.subject||"Geral"} · \${q.topic||"-"} · \${q.difficulty||"easy"}</div>
+            <div style="font-weight:600">\${q.questionText}</div>
+            <div style="font-size:12px;color:#889">Opções: \${(q.options||[]).map((o,i)=>\`\${i}:\${o}\`).join(" | ")} | Correta: \${q.correctIndex}</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn secondary" data-edit="\${q.id}"><i class="fas fa-pen"></i></button>
+            <button class="btn danger" data-del="\${q.id}"><i class="fas fa-trash"></i></button>
+          </div>
+        </div>\`).join("") || "<div class='muted'>Nenhuma questão.</div>";
+
+      cont.querySelectorAll("button[data-edit]").forEach(btn=>{
+        btn.onclick = ()=>{
+          const id = btn.dataset.edit;
+          const q = items.find(i => i.id === id); if (!q) return;
+          document.getElementById("bq-id").value = q.id || "";
+          document.getElementById("bq-subject").value = q.subject || "";
+          document.getElementById("bq-topic").value = q.topic || "";
+          document.getElementById("bq-difficulty").value = q.difficulty || "easy";
+          document.getElementById("bq-text").value = q.questionText || "";
+          document.getElementById("bq-options").value = (q.options||[]).join("; ");
+          document.getElementById("bq-correct").value = q.correctIndex ?? 0;
+          showToast("Questão carregada no formulário.", "info");
+        };
+      });
+      cont.querySelectorAll("button[data-del]").forEach(btn=>{
+        btn.onclick = async ()=>{
+          if (!confirm("Excluir esta questão?")) return;
+          try{
+            await deleteDoc(doc(db, "questions", btn.dataset.del));
+            showToast("Questão excluída.", "success");
+            renderBridgeQuestions();
+          }catch(err){ showToast("Erro ao excluir: "+err.message, "error"); }
+        };
+      });
+    }catch(err){
+      cont.innerHTML = "<div class='muted'>Erro: "+err.message+"</div>";
+    }
+  }
+
+  function showToast(msg, type){
+    try { showNotification(msg, type); } catch(_) {
+      alert(msg);
+    }
+  }
+
+  // Save form
+  document.getElementById("bridge-question-form").addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    const payload = {
+      id: document.getElementById("bq-id").value || undefined,
+      subject: document.getElementById("bq-subject").value.trim(),
+      topic: document.getElementById("bq-topic").value.trim(),
+      difficulty: document.getElementById("bq-difficulty").value,
+      questionText: document.getElementById("bq-text").value.trim(),
+      options: document.getElementById("bq-options").value.split(";").map(s=>s.trim()).filter(Boolean),
+      correctIndex: parseInt(document.getElementById("bq-correct").value,10) || 0,
+      updatedAt: new Date()
+    };
+    if (!payload.subject || !payload.questionText || payload.options.length < 2){
+      showToast("Preencha matéria, enunciado e pelo menos 2 opções.", "error");
+      return;
+    }
+    try{
+      if (payload.id){
+        await setDoc(doc(db, "questions", payload.id), payload, { merge:true });
+      } else {
+        const ref = await addDoc(collection(db, "questions"), payload);
+        await setDoc(ref, { id: ref.id }, { merge:true });
+      }
+      showToast("Questão salva!", "success");
+      document.getElementById("bq-id").value = "";
+      renderBridgeQuestions();
+    }catch(err){ showToast("Erro ao salvar: "+err.message, "error"); }
+  });
+  document.getElementById("bq-clear").onclick = ()=>{
+    ["bq-id","bq-subject","bq-topic","bq-text","bq-options"].forEach(id=> document.getElementById(id).value = "");
+    document.getElementById("bq-difficulty").value = "easy";
+    document.getElementById("bq-correct").value = 0;
+  };
+  document.getElementById("bq-reload").onclick = renderBridgeQuestions;
+
+  // Users management
+  async function renderBridgeUsers(){
+    const cont = document.getElementById("busers-list");
+    cont.innerHTML = "<div class='muted'>Carregando usuários...</div>";
+    try{
+      const snap = await getDocs(collection(db, "users"));
+      let html = "";
+      snap.forEach(d => {
+        const u = d.data();
+        html += \`
+          <div class="question-item" style="display:flex;justify-content:space-between;align-items:center;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px">
+            <div><strong>\${u.email}</strong> <span style="font-size:12px;color:#889">[\${u.isAdmin?"Admin":"Usuário"}]</span></div>
+            <button class="btn ghost" data-uid="\${u.uid}" data-new="\${!u.isAdmin}">\${u.isAdmin?"Remover admin":"Tornar admin"}</button>
+          </div>\`;
+      });
+      cont.innerHTML = html || "<div class='muted'>Sem usuários.</div>";
+      cont.querySelectorAll("button[data-uid]").forEach(btn=>{
+        btn.onclick = async ()=>{
+          const uid = btn.dataset.uid;
+          const newVal = btn.dataset.new === "true";
+          try{
+            await updateDoc(doc(db, "users", uid), { isAdmin: newVal });
+            showToast(newVal?"Usuário promovido a admin.":"Admin removido.","success");
+            renderBridgeUsers();
+          }catch(err){ showToast("Erro ao atualizar papel: "+err.message, "error"); }
+        };
+      });
+    }catch(err){
+      cont.innerHTML = "<div class='muted'>Erro: "+err.message+"</div>";
+    }
+  }
+
+  // kick things off
+  renderBridgeQuestions();
+  renderBridgeUsers();
+})();
+
+</script>
+
+
+
+
+<button id="global-back-button" class="back-button" style="position:fixed;left:16px;bottom:16px;z-index:9999;padding:10px 14px;border-radius:999px;border:none;background:var(--primary-color);color:#fff;box-shadow:0 4px 10px rgba(0,0,0,.2);cursor:pointer;"><i class="fas fa-arrow-left"></i> Voltar</button>
+
+
+<!-- Firebase Firestore Perguntas com Debug -->
+<script type="module">
+import { getFirestore, collection, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+console.log("📡 Firestore carregado...");
+
+const db = getFirestore(app);
+
+// Função para salvar pergunta
+async function salvarPergunta(pergunta, opcoes, respostaCorreta) {
+  console.log("🚀 Tentando salvar pergunta:", pergunta, opcoes, respostaCorreta);
+  try {
+    const ref = await addDoc(collection(db, "questions"), {
+      texto: pergunta,
+      opcoes: opcoes,
+      correta: respostaCorreta,
+      criadoEm: new Date()
+    });
+    console.log("✅ Pergunta salva com ID:", ref.id);
+    alert("✅ Pergunta salva!");
+    carregarPerguntas(); // atualiza lista
+  } catch (e) {
+    console.error("❌ Erro ao salvar pergunta: ", e);
+    alert("Erro ao salvar pergunta. Veja o console.");
+  }
+}
+
+// Função para carregar perguntas
+async function carregarPerguntas() {
+  console.log("📥 Carregando perguntas do Firestore...");
+  try {
+    const querySnapshot = await getDocs(collection(db, "questions"));
+    let lista = document.getElementById("listaPerguntas");
+    if (!lista) {
+      console.warn("⚠️ Elemento #listaPerguntas não encontrado no HTML.");
+      return;
+    }
+    lista.innerHTML = "";
+    querySnapshot.forEach((doc) => {
+      let q = doc.data();
+      console.log("📌 Pergunta carregada:", q);
+      let div = document.createElement("div");
+      div.classList.add("question");
+      div.innerHTML = `<b>${q.texto}</b><br>Opções: ${q.opcoes?.join(", ")}`;
+      lista.appendChild(div);
+    });
+  } catch (e) {
+    console.error("❌ Erro ao carregar perguntas: ", e);
+  }
+}
+
+// Listener do botão salvar (caso exista no painel admin)
+const btnSalvar = document.getElementById("btnSalvarPergunta");
+if (btnSalvar) {
+  console.log("✔️ Botão de salvar encontrado");
+  btnSalvar.addEventListener("click", () => {
+    let pergunta = document.getElementById("inputPergunta")?.value;
+    let opcoes = [
+      document.getElementById("inputOpcaoA")?.value,
+      document.getElementById("inputOpcaoB")?.value,
+      document.getElementById("inputOpcaoC")?.value
+    ];
+    let respostaCorreta = document.getElementById("inputResposta")?.value;
+    salvarPergunta(pergunta, opcoes, respostaCorreta);
+  });
+} else {
+  console.warn("⚠️ Botão #btnSalvarPergunta não encontrado no HTML.");
+}
+
+// Carregar perguntas sempre que abrir a página
+window.addEventListener("load", carregarPerguntas);
+</script>
+
+
+
+
+
+
+
+
+
+
+<!-- Firestore Sync Function (Safe Object Conversion) -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+  import { getFirestore, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+  // Configuração do Firebase (já existente no seu projeto)
+  const firebaseConfig = {
+    apiKey: "AIzaSyDCYYjs9oOhjEVub_LQOx-N7nH1bc8nPoo",
+    authDomain: "integra-edu.firebaseapp.com",
+    projectId: "integra-edu",
+    storageBucket: "integra-edu.firebasestorage.app",
+    messagingSenderId: "356173349612",
+    appId: "1:356173349612:web:52d8bc117e3acad1ad9bc9",
+    measurementId: "G-SPN29GT7HC"
+  };
+
+  // Inicialização unificada
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+
+  console.log("🔥 Firebase inicializado com sucesso!");
+
+  // Função global para salvar perguntas no Firestore
+  window.syncQuestionsToFirestore = async function (questionObj) {
+    console.log("🚀 Enviando pergunta ao Firestore:", questionObj);
+
+    // Garantir que o dado enviado seja um objeto
+    if (Array.isArray(questionObj)) {
+      console.warn("⚠️ Recebi um array, convertendo para objeto...");
+      questionObj = { data: questionObj };
+    } else if (typeof questionObj !== "object" || questionObj === null) {
+      console.warn("⚠️ Dado inválido, convertendo para objeto...");
+      questionObj = { value: questionObj };
+    }
+
+    try {
+      const ref = await addDoc(collection(db, "questions"), questionObj);
+      console.log("✅ Pergunta salva no Firestore com ID:", ref.id);
+    } catch (error) {
+      console.error("❌ Erro ao salvar pergunta no Firestore:", error);
+    }
+  }
+</script>
+
 
 </body>
 </html>
